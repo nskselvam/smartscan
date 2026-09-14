@@ -1,0 +1,7 @@
+{
+  "scenario": "mixed",
+  "episodes": 100,
+  "max_steps": 1000,
+  "seed": 42,
+  "output_dir": "results/experiments/baseline_mixed_seed_42"
+}

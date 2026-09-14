@@ -1,31 +1,5 @@
-/// Periodic Activity Analysis
-///
-/// Estimates periodicity, phase, and future transmission windows
-/// for periodic emitters.
-pub struct PeriodicPredictor;
+pub mod estimator;
+pub mod predictor;
 
-impl PeriodicPredictor {
-    pub fn new() -> Self {
-        PeriodicPredictor
-    }
-
-    pub fn estimate_period(&self) -> Option<usize> {
-        None
-    }
-}
-
-impl Default for PeriodicPredictor {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_periodic_predictor_creation() {
-        let _predictor = PeriodicPredictor::new();
-    }
-}
+pub use estimator::{PeriodicTracker, PeriodicityEstimate, PeriodicityEstimator};
+pub use predictor::{ExplorationReserve, PeriodicPredictor, PredictedWindow};

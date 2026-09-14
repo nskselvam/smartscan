@@ -20,7 +20,7 @@ pub struct EpisodeSummary {
 
 pub fn run_episode(
     environment: &mut RfEnvironment,
-    scheduler: &mut impl Scheduler,
+    scheduler: &mut dyn Scheduler,
     max_steps: usize,
 ) -> EpisodeSummary {
     scheduler.reset();

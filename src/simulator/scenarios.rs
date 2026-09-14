@@ -3,6 +3,7 @@ use super::environment::RfEnvironment;
 use super::receiver::Receiver;
 
 /// Reproducible RF simulator configuration and emitter scenario.
+#[derive(Debug, Clone)]
 pub struct Scenario {
     pub name: String,
     pub description: String,
@@ -34,6 +35,11 @@ impl Scenario {
             self.emitters,
             self.seed,
         )
+    }
+
+    pub fn with_seed(mut self, seed: u64) -> Self {
+        self.seed = seed;
+        self
     }
 
     pub fn fixed_frequency() -> Self {

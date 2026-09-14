@@ -41,6 +41,7 @@ pub struct StepInfo {
 #[derive(Debug, Clone, PartialEq)]
 pub struct StepResult {
     pub observation: Vec<bool>,
+    pub monitored_bands: Vec<bool>,
     pub reward: f32,
     pub done: bool,
     pub selected_band: usize,
@@ -198,6 +199,7 @@ impl RfEnvironment {
         self.current_time += 1;
         StepResult {
             observation,
+            monitored_bands: monitored,
             reward,
             done: self.current_time == self.time_horizon,
             selected_band,

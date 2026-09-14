@@ -1,9 +1,13 @@
+pub mod benchmark;
 pub mod runner;
 
+pub use benchmark::{
+    run_baseline_benchmark, BenchmarkConfig, BenchmarkError, BenchmarkReport, SchedulerBenchmark,
+};
 pub use runner::{run_episode, EpisodeSummary};
 
 /// Measured evaluation metrics derived from episode outcomes.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Metrics {
     pub pd: f32,
     pub pfa: f32,

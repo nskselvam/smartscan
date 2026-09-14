@@ -1,0 +1,66 @@
+[
+  {
+    "scheduler": "random",
+    "episodes": 100,
+    "metrics": {
+      "pd": 0.103357136,
+      "pfa": 0.010027924,
+      "intercept_rate": 0.14139307,
+      "avg_intercept_time": 0.52366334,
+      "avg_reward": -0.47715396,
+      "miss_rate": 0.89664286,
+      "total_true_positives": 35196,
+      "total_false_positives": 6554,
+      "total_active_bands": 340528,
+      "total_monitored_inactive_bands": 653575
+    }
+  },
+  {
+    "scheduler": "round-robin",
+    "episodes": 100,
+    "metrics": {
+      "pd": 0.10500164,
+      "pfa": 0.010014816,
+      "intercept_rate": 0.11264905,
+      "avg_intercept_time": 0.26308465,
+      "avg_reward": -0.469877,
+      "miss_rate": 0.8949984,
+      "total_true_positives": 35756,
+      "total_false_positives": 6543,
+      "total_active_bands": 340528,
+      "total_monitored_inactive_bands": 653332
+    }
+  },
+  {
+    "scheduler": "epsilon-greedy",
+    "episodes": 100,
+    "metrics": {
+      "pd": 0.28463444,
+      "pfa": 0.0100602135,
+      "intercept_rate": 0.06292576,
+      "avg_intercept_time": 0.16219582,
+      "avg_reward": 0.3268475,
+      "miss_rate": 0.7153655,
+      "total_true_positives": 96926,
+      "total_false_positives": 6008,
+      "total_active_bands": 340528,
+      "total_monitored_inactive_bands": 597204
+    }
+  },
+  {
+    "scheduler": "ucb1",
+    "episodes": 100,
+    "metrics": {
+      "pd": 0.30071244,
+      "pfa": 0.010080846,
+      "intercept_rate": 0.055968843,
+      "avg_intercept_time": 0.032313656,
+      "avg_reward": 0.39824995,
+      "miss_rate": 0.69928753,
+      "total_true_positives": 102401,
+      "total_false_positives": 5969,
+      "total_active_bands": 340528,
+      "total_monitored_inactive_bands": 592113
+    }
+  }
+]

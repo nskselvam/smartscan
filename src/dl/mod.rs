@@ -1,27 +1,9 @@
-/// Deep Learning Model
-///
-/// Implements temporal prediction models (GRU/LSTM) for predicting
-/// future frequency band activity.
-pub struct DlModel;
+pub mod dataset;
+pub mod metrics;
+pub mod model;
+pub mod train;
 
-impl DlModel {
-    pub fn new() -> Self {
-        DlModel
-    }
-}
-
-impl Default for DlModel {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_dl_model_creation() {
-        let _model = DlModel::new();
-    }
-}
+pub use dataset::LabeledSequence;
+pub use metrics::{evaluate_predictions, PredictionMetrics};
+pub use model::{GruActivityPredictor, GruConfig, ModelError};
+pub use train::{train_model, DlTrainingConfig, TrainingError, TrainingReport};

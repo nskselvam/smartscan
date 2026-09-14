@@ -1,27 +1,25 @@
-/// Data Processing
-///
-/// Handles dataset loading, preprocessing, feature extraction,
-/// and temporal window generation.
-pub struct DataLoader;
+pub mod features;
+pub mod hdf5_loader;
+pub mod streaming;
+pub mod windows;
 
-impl DataLoader {
-    pub fn new() -> Self {
-        DataLoader
-    }
-}
-
-impl Default for DataLoader {
-    fn default() -> Self {
-        Self::new()
-    }
-}
+pub use features::{FeatureNormalizer, FeatureVector, NormalizationConfig, NormalizationStats};
+pub use hdf5_loader::{
+    load_tsrd_pulses, preprocess_tsrd_hdf5, TsrdLoadError, TsrdLoadReport,
+};
+pub use streaming::{
+    inspect_directory, preprocess_csv_file, write_processed_index, CsvPulseReader,
+    DatasetInspection, ProcessedFileIndex, PulseRecord, StreamingError,
+};
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn test_data_loader_creation() {
-        let _loader = DataLoader::new();
+    fn inspection_reports_a_missing_directory() {
+        let inspection = inspect_directory("does-not-exist").expect("inspection should succeed");
+        assert_eq!(inspection.file_count, 0);
+        assert_eq!(inspection.total_bytes, 0);
     }
 }
