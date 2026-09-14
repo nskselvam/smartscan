@@ -1,12 +1,16 @@
 use rand::rngs::StdRng;
 use rand::SeedableRng;
+use serde::{Deserialize, Serialize};
+use std::fs;
+use std::path::Path;
+use thiserror::Error;
 
 use super::{
     compute_gae, normalize_advantages, CategoricalPolicy, PpoEnvironment, PpoError, RolloutStep,
     ValueNetwork,
 };
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PpoConfig {
     pub state_size: usize,
     pub action_count: usize,
@@ -37,6 +41,21 @@ pub struct PpoAgent {
     rng: StdRng,
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+struct PpoCheckpoint {
+    config: PpoConfig,
+    actor: CategoricalPolicy,
+    critic: ValueNetwork,
+}
+
+#[derive(Debug, Error)]
+pub enum PpoCheckpointError {
+    #[error("PPO checkpoint I/O error: {0}")]
+    Io(#[from] std::io::Error),
+    #[error("PPO checkpoint serialization error: {0}")]
+    Serialization(#[from] serde_json::Error),
+}
+
 impl PpoAgent {
     pub fn new(config: PpoConfig) -> Self {
         assert!(config.state_size > 0 && config.action_count > 0);
@@ -57,6 +76,34 @@ impl PpoAgent {
 
     pub fn action_probabilities(&self, state: &[f32]) -> Vec<f32> {
         self.actor.probabilities(state)
+    }
+
+    pub fn save(&self, path: impl AsRef<Path>) -> Result<(), PpoCheckpointError> {
+        let path = path.as_ref();
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        let checkpoint = PpoCheckpoint {
+            config: self.config.clone(),
+            actor: self.actor.clone(),
+            critic: self.critic.clone(),
+        };
+        fs::write(path, serde_json::to_vec(&checkpoint)?)?;
+        Ok(())
+    }
+
+    pub fn load(path: impl AsRef<Path>) -> Result<Self, PpoCheckpointError> {
+        let checkpoint: PpoCheckpoint = serde_json::from_slice(&fs::read(path)?)?;
+        Ok(Self {
+            rng: StdRng::seed_from_u64(checkpoint.config.seed),
+            config: checkpoint.config,
+            actor: checkpoint.actor,
+            critic: checkpoint.critic,
+        })
+    }
+
+    pub fn is_compatible(&self, state_size: usize, action_count: usize) -> bool {
+        self.config.state_size == state_size && self.config.action_count == action_count
     }
 
     pub fn train_episode(
@@ -168,5 +215,17 @@ mod tests {
         assert_eq!(report.rollout_steps, 20);
         assert!(report.value_loss.is_finite());
         assert!(report.entropy.is_finite());
+    }
+
+    #[test]
+    fn checkpoint_restores_policy_probabilities() {
+        let path = std::env::temp_dir().join(format!("smartscan-ppo-{}.json", std::process::id()));
+        let agent = PpoAgent::new(config(2));
+        let state = vec![0.25; 13];
+        let expected = agent.action_probabilities(&state);
+        agent.save(&path).expect("checkpoint should save");
+        let loaded = PpoAgent::load(&path).expect("checkpoint should load");
+        assert_eq!(loaded.action_probabilities(&state), expected);
+        std::fs::remove_file(path).expect("checkpoint should be removed");
     }
 }

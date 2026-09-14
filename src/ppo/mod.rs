@@ -9,5 +9,5 @@ pub use policy::{CategoricalPolicy, PolicyDecision};
 pub use rollout::{
     clipped_surrogate_objective, compute_gae, normalize_advantages, AdvantageEstimate, RolloutStep,
 };
-pub use trainer::{PpoAgent, PpoConfig, PpoTrainingReport};
+pub use trainer::{PpoAgent, PpoCheckpointError, PpoConfig, PpoTrainingReport};
 pub use value::ValueNetwork;

@@ -42,6 +42,12 @@ impl Scenario {
         self
     }
 
+    pub fn with_num_bands(mut self, num_bands: usize) -> Self {
+        assert!(num_bands > 0, "num_bands must be positive");
+        self.num_bands = num_bands;
+        self
+    }
+
     pub fn fixed_frequency() -> Self {
         Self {
             name: "fixed-frequency".to_string(),
@@ -125,5 +131,11 @@ mod tests {
         let mut environment = Scenario::mixed().into_environment();
         let result = environment.step(0);
         assert_eq!(result.observation.len(), 64);
+    }
+
+    #[test]
+    fn scenario_band_count_can_be_configured() {
+        let scenario = Scenario::mixed().with_num_bands(30);
+        assert_eq!(scenario.num_bands, 30);
     }
 }

@@ -192,7 +192,7 @@ fn cmd_train(config: &Config, subcommand: TrainCommand) -> Result<()> {
             if steps == 0 {
                 bail!("PPO training steps must be positive");
             }
-            let scenario = Scenario::mixed();
+            let scenario = Scenario::mixed().with_num_bands(30);
             let action_count = scenario.num_bands;
             let mut environment = PpoEnvironment::new(scenario.into_environment());
             let state_size = environment.observation().to_vector().len();
@@ -232,9 +232,13 @@ fn cmd_train(config: &Config, subcommand: TrainCommand) -> Result<()> {
                     "Measured PPO training result"
                 );
             }
-            if checkpoint.is_some() {
-                warn!("PPO checkpointing will be added with experiment artifacts in Phase 13");
-            }
+            let checkpoint_path = checkpoint.unwrap_or_else(|| {
+                std::path::Path::new(&config.app.models_dir)
+                    .join("ppo")
+                    .join("latest.json")
+            });
+            agent.save(&checkpoint_path)?;
+            info!(path = %checkpoint_path.display(), "Saved trained PPO checkpoint");
         }
         TrainCommand::All { quick } => {
             info!("Training all models (quick: {})", quick);

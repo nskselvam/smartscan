@@ -1,4 +1,5 @@
 use rand::Rng;
+use serde::{Deserialize, Serialize};
 
 use super::rollout::clipped_surrogate_objective;
 use super::trainer::PpoConfig;
@@ -10,7 +11,7 @@ pub struct PolicyDecision {
     pub log_probability: f32,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CategoricalPolicy {
     action_count: usize,
     state_size: usize,

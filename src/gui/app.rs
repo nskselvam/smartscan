@@ -3,8 +3,8 @@ use eframe::egui::{self, Color32, Pos2, Rect, Stroke, StrokeKind, Vec2};
 use crate::ppo::{PpoAgent, PpoConfig, PpoEnvironment};
 use crate::simulator::{Scenario, StepResult};
 
-const HEATMAP_HEIGHT: f32 = 280.0;
-const MAX_HISTORY_ROWS: usize = 80;
+const MAX_HISTORY_ROWS: usize = 60;
+const MAX_CHART_SAMPLES: usize = 120;
 
 struct HeatmapRow {
     truth: Vec<bool>,
@@ -48,18 +48,22 @@ impl LiveMetrics {
 pub struct GuiApp {
     environment: PpoEnvironment,
     ppo_agent: PpoAgent,
+    ppo_checkpoint_loaded: bool,
     auto_run: bool,
     history: Vec<HeatmapRow>,
+    action_probabilities: Vec<f32>,
+    reward_history: Vec<f32>,
+    hit_history: Vec<f32>,
     metrics: LiveMetrics,
     last_result: Option<StepResult>,
 }
 
 impl GuiApp {
     pub fn new() -> Self {
-        let scenario = Scenario::mixed();
+        let scenario = Scenario::mixed().with_num_bands(30);
         let num_bands = scenario.num_bands;
         let environment = PpoEnvironment::new(scenario.into_environment());
-        let ppo_agent = PpoAgent::new(PpoConfig {
+        let ppo_config = PpoConfig {
             state_size: environment.observation().to_vector().len(),
             action_count: num_bands,
             learning_rate: 0.001,
@@ -71,12 +75,23 @@ impl GuiApp {
             gradient_clip: 1.0,
             update_epochs: 4,
             seed: 42,
-        });
+        };
+        let checkpoint = std::path::Path::new("models/ppo/latest.json");
+        let (ppo_agent, ppo_checkpoint_loaded) = match PpoAgent::load(checkpoint) {
+            Ok(agent) if agent.is_compatible(ppo_config.state_size, ppo_config.action_count) => {
+                (agent, true)
+            }
+            _ => (PpoAgent::new(ppo_config), false),
+        };
         Self {
             environment,
             ppo_agent,
+            ppo_checkpoint_loaded,
             auto_run: false,
             history: Vec::new(),
+            action_probabilities: vec![1.0 / num_bands as f32; num_bands],
+            reward_history: Vec::new(),
+            hit_history: Vec::new(),
             metrics: LiveMetrics::default(),
             last_result: None,
         }
@@ -86,6 +101,9 @@ impl GuiApp {
         self.environment.reset();
         self.auto_run = false;
         self.history.clear();
+        self.action_probabilities.fill(1.0 / self.environment.num_actions() as f32);
+        self.reward_history.clear();
+        self.hit_history.clear();
         self.metrics = LiveMetrics::default();
         self.last_result = None;
     }
@@ -113,6 +131,12 @@ impl GuiApp {
             .step(selected_band)
             .expect("PPO selected a valid action before episode completion");
         let result = transition.result;
+        self.action_probabilities = action_probabilities;
+        Self::push_chart_value(&mut self.reward_history, result.reward);
+        Self::push_chart_value(
+            &mut self.hit_history,
+            if result.info.true_positives > 0 { 1.0 } else { 0.0 },
+        );
         self.metrics.record(&result);
         self.history.push(HeatmapRow {
             truth,
@@ -128,9 +152,16 @@ impl GuiApp {
         self.last_result = Some(result);
     }
 
+    fn push_chart_value(values: &mut Vec<f32>, value: f32) {
+        values.push(value);
+        if values.len() > MAX_CHART_SAMPLES {
+            values.remove(0);
+        }
+    }
+
     fn draw_heatmap(&self, ui: &mut egui::Ui) {
         let (response, painter) = ui.allocate_painter(
-            Vec2::new(ui.available_width(), HEATMAP_HEIGHT),
+            Vec2::new(ui.available_width(), (ui.available_height() * 0.62).clamp(280.0, 430.0)),
             egui::Sense::hover(),
         );
         let rect = response.rect;
@@ -168,6 +199,62 @@ impl GuiApp {
         ui.label("Orange: active ground truth. Green: receiver report. White outline: selected scan band.");
     }
 
+    fn draw_bar_chart(&self, ui: &mut egui::Ui) {
+        ui.heading("PPO Band Priorities");
+        let (response, painter) = ui.allocate_painter(
+            Vec2::new(ui.available_width(), 150.0),
+            egui::Sense::hover(),
+        );
+        let rect = response.rect;
+        painter.rect_filled(rect, 2.0, Color32::from_rgb(20, 28, 34));
+        let peak = self
+            .action_probabilities
+            .iter()
+            .copied()
+            .fold(0.0_f32, f32::max)
+            .max(1e-6);
+        let bar_width = rect.width() / self.action_probabilities.len() as f32;
+        for (band, probability) in self.action_probabilities.iter().enumerate() {
+            let height = rect.height() * (*probability / peak);
+            let bar = Rect::from_min_size(
+                Pos2::new(rect.left() + band as f32 * bar_width + 1.0, rect.bottom() - height),
+                Vec2::new((bar_width - 2.0).max(1.0), height),
+            );
+            let color = if self.last_result.as_ref().is_some_and(|result| result.selected_band == band) {
+                Color32::from_rgb(77, 213, 153)
+            } else {
+                Color32::from_rgb(71, 138, 196)
+            };
+            painter.rect_filled(bar, 0.0, color);
+        }
+        ui.label("Taller bars are bands PPO currently prefers. Green is the chosen band.");
+    }
+
+    fn draw_line_chart(&self, ui: &mut egui::Ui, title: &str, values: &[f32], color: Color32) {
+        ui.heading(title);
+        let (response, painter) = ui.allocate_painter(
+            Vec2::new(ui.available_width(), 150.0),
+            egui::Sense::hover(),
+        );
+        let rect = response.rect;
+        painter.rect_filled(rect, 2.0, Color32::from_rgb(20, 28, 34));
+        if values.len() < 2 {
+            return;
+        }
+        let minimum = values.iter().copied().fold(f32::INFINITY, f32::min);
+        let maximum = values.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+        let range = (maximum - minimum).max(1e-4);
+        let points = values
+            .iter()
+            .enumerate()
+            .map(|(index, value)| Pos2::new(
+                rect.left() + index as f32 * rect.width() / (values.len() - 1) as f32,
+                rect.bottom() - ((*value - minimum) / range) * rect.height(),
+            ))
+            .collect::<Vec<_>>();
+        painter.add(egui::Shape::line(points, Stroke::new(1.5_f32, color)));
+    }
+
     fn draw_metrics(&self, ui: &mut egui::Ui) {
         let detection_probability =
             LiveMetrics::ratio(self.metrics.true_positives, self.metrics.active_bands);
@@ -191,13 +278,13 @@ impl GuiApp {
                 ui.label("Average intercept time");
                 ui.label(format!("{intercept_time:.3}"));
                 ui.end_row();
-                ui.label("Pd");
+                ui.label("Detection rate");
                 ui.label(format!("{detection_probability:.3}"));
                 ui.end_row();
-                ui.label("Pfa");
+                ui.label("False alarm rate");
                 ui.label(format!("{false_alarm_probability:.3}"));
                 ui.end_row();
-                ui.label("Intercept rate");
+                ui.label("Window intercept rate");
                 ui.label(format!("{intercept_rate:.3}"));
                 ui.end_row();
             });
@@ -236,20 +323,24 @@ impl eframe::App for GuiApp {
                     self.environment.current_time(),
                     self.environment.time_horizon()
                 ));
-                ui.label("Scheduler: PPO policy (untrained)");
+                ui.label(if self.ppo_checkpoint_loaded {
+                    "Scheduler: PPO policy (trained checkpoint)"
+                } else {
+                    "Scheduler: PPO policy (untrained)"
+                });
             });
         });
         egui::SidePanel::right("state")
-            .min_width(250.0)
+            .min_width(290.0)
             .show(context, |ui| {
                 ui.heading("Receiver State");
                 if let Some(result) = &self.last_result {
                     ui.label(format!("Selected band: {}", result.selected_band));
                     ui.label(format!("Latest reward: {:.3}", result.reward));
                     ui.label(if result.info.true_positives > 0 {
-                        "Hit"
+                        "Detection: HIT"
                     } else {
-                        "Miss"
+                        "Detection: MISS"
                     });
                     ui.label(format!("Active bands: {}", result.info.active_bands));
                 } else {
@@ -260,13 +351,32 @@ impl eframe::App for GuiApp {
                 self.draw_metrics(ui);
                 ui.separator();
                 ui.heading("Model Status");
-                ui.label("DL prediction probabilities: NOT YET MEASURED");
-                ui.label("PPO action probabilities: live policy output");
-                ui.label("Training progress: NOT YET MEASURED");
+                ui.label("DL predictor: not trained / not loaded");
+                ui.label(if self.ppo_checkpoint_loaded {
+                    "PPO action probabilities: trained policy output"
+                } else {
+                    "PPO action probabilities: untrained policy output"
+                });
+                ui.label("PPO training: checkpoint loaded");
             });
         egui::CentralPanel::default().show(context, |ui| {
-            ui.heading("Frequency-Time Environment");
+            ui.heading("30-Band Frequency-Time Environment");
             self.draw_heatmap(ui);
+            ui.columns(2, |columns| {
+                self.draw_bar_chart(&mut columns[0]);
+                self.draw_line_chart(
+                    &mut columns[1],
+                    "Recent Reward",
+                    &self.reward_history,
+                    Color32::from_rgb(242, 178, 65),
+                );
+            });
+            self.draw_line_chart(
+                ui,
+                "Detection History (1 = hit, 0 = miss)",
+                &self.hit_history,
+                Color32::from_rgb(77, 213, 153),
+            );
         });
     }
 }

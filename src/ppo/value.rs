@@ -1,6 +1,7 @@
 use rand::Rng;
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ValueNetwork {
     weights: Vec<f32>,
     bias: f32,
