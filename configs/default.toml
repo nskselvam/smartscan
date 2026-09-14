@@ -1,0 +1,27 @@
+[app]
+name = "SMARTSCAN"
+version = "0.1.0"
+log_level = "info"
+data_dir = "data"
+models_dir = "models"
+results_dir = "results"
+
+[simulator]
+num_bands = 32
+time_horizon = 1000
+num_emitters = 5
+receiver_bandwidth_fraction = 0.1
+detection_probability = 0.95
+false_alarm_probability = 0.01
+seed = 42
+
+[training]
+batch_size = 32
+learning_rate = 0.001
+epochs = 100
+validation_split = 0.2
+checkpoint_dir = "models"
+
+[evaluation]
+num_test_episodes = 100
+metrics_output = "results/metrics"
