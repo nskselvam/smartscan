@@ -1,5 +1,8 @@
 use anyhow::Result;
 use smartscan::cli::{Args, Command, DataCommand, TrainCommand};
+use smartscan::evaluation::{run_episode, Metrics};
+use smartscan::scheduler::{RandomScheduler, RoundRobinScheduler};
+use smartscan::simulator::Scenario;
 use smartscan::{init_logging, Config, PROJECT_DESC, PROJECT_NAME, VERSION};
 use tracing::{error, info, warn};
 
@@ -189,7 +192,55 @@ fn cmd_demo(_config: &Config, steps: usize, visualize: bool) -> Result<()> {
         "Running demo simulation (steps: {}, visualize: {})",
         steps, visualize
     );
-    warn!("Demo not yet implemented");
+
+    let scenario = Scenario::mixed();
+    let num_bands = scenario.num_bands;
+    let seed = scenario.seed;
+    let mut random_environment = scenario.into_environment();
+    let mut random_scheduler = RandomScheduler::new(num_bands, seed.wrapping_add(2));
+    let random_result = run_episode(&mut random_environment, &mut random_scheduler, steps);
+    let random_metrics = Metrics::from_episodes(std::slice::from_ref(&random_result));
+
+    let scenario = Scenario::mixed();
+    let mut round_robin_environment = scenario.into_environment();
+    let mut round_robin_scheduler = RoundRobinScheduler::new(num_bands);
+    let round_robin_result = run_episode(
+        &mut round_robin_environment,
+        &mut round_robin_scheduler,
+        steps,
+    );
+    let round_robin_metrics = Metrics::from_episodes(std::slice::from_ref(&round_robin_result));
+
+    info!(
+        scheduler = random_result.scheduler,
+        steps = random_result.steps,
+        total_reward = random_result.total_reward,
+        true_positives = random_result.true_positives,
+        false_positives = random_result.false_positives,
+        missed_active_bands = random_result.missed_active_bands,
+        pd = random_metrics.pd,
+        pfa = random_metrics.pfa,
+        intercept_rate = random_metrics.intercept_rate,
+        avg_intercept_time = random_metrics.avg_intercept_time,
+        "Measured baseline result"
+    );
+    info!(
+        scheduler = round_robin_result.scheduler,
+        steps = round_robin_result.steps,
+        total_reward = round_robin_result.total_reward,
+        true_positives = round_robin_result.true_positives,
+        false_positives = round_robin_result.false_positives,
+        missed_active_bands = round_robin_result.missed_active_bands,
+        pd = round_robin_metrics.pd,
+        pfa = round_robin_metrics.pfa,
+        intercept_rate = round_robin_metrics.intercept_rate,
+        avg_intercept_time = round_robin_metrics.avg_intercept_time,
+        "Measured baseline result"
+    );
+
+    if visualize {
+        warn!("GUI visualization is scheduled for Phase 14; the measured CLI demo completed");
+    }
     Ok(())
 }
 

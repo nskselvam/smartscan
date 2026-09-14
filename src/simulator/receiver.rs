@@ -31,9 +31,7 @@ impl Receiver {
         assert!(num_bands > 0, "num_bands must be positive");
         assert!(selected_band < num_bands, "selected band is out of range");
 
-        let width = (num_bands as f32 * self.bandwidth_fraction)
-            .ceil()
-            .max(1.0) as usize;
+        let width = (num_bands as f32 * self.bandwidth_fraction).ceil().max(1.0) as usize;
         let start = selected_band.saturating_sub(width / 2);
         let end = (start + width).min(num_bands);
         let mut monitored = vec![false; num_bands];
@@ -74,7 +72,10 @@ mod tests {
     fn monitored_band_count_matches_receiver_bandwidth() {
         let receiver = Receiver::new(0.25, 1.0, 0.0);
         let monitored = receiver.monitored_bands(32, 16);
-        assert_eq!(monitored.into_iter().filter(|monitored| *monitored).count(), 8);
+        assert_eq!(
+            monitored.into_iter().filter(|monitored| *monitored).count(),
+            8
+        );
     }
 
     #[test]

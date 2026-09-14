@@ -6,7 +6,6 @@
 /// - Intermittent emitters
 /// - Frequency-agile emitters
 /// - Frequency-hopping emitters
-
 use rand::Rng;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -54,7 +53,9 @@ impl Emitter {
 
     pub fn is_transmitting(&self, time: usize, rng: &mut impl Rng) -> bool {
         match self.emitter_type {
-            EmitterType::FixedFrequency | EmitterType::FrequencyAgile | EmitterType::FrequencyHopping => true,
+            EmitterType::FixedFrequency
+            | EmitterType::FrequencyAgile
+            | EmitterType::FrequencyHopping => true,
             EmitterType::Periodic => {
                 let active_slots = (self.period as f32 * self.duty_cycle).ceil() as usize;
                 time % self.period < active_slots
