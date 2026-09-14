@@ -130,7 +130,8 @@ mod tests {
 
     #[test]
     fn rejects_a_zero_record_limit() {
-        let error = load_tsrd_pulses("missing.h5", 0).expect_err("zero limit should be rejected first");
+        let error =
+            load_tsrd_pulses("missing.h5", 0).expect_err("zero limit should be rejected first");
         assert!(matches!(error, TsrdLoadError::ZeroLimit));
     }
 }

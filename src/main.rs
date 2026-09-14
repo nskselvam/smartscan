@@ -8,6 +8,7 @@ use smartscan::gui::launch;
 use smartscan::ppo::{PpoAgent, PpoConfig, PpoEnvironment};
 use smartscan::scheduler::{RandomScheduler, RoundRobinScheduler};
 use smartscan::simulator::Scenario;
+use smartscan::storage::PostgresExperimentStore;
 use smartscan::{init_logging, Config, PROJECT_DESC, PROJECT_NAME, VERSION};
 use tracing::{error, info, warn};
 
@@ -123,8 +124,13 @@ fn cmd_data(config: &Config, subcommand: DataCommand) -> Result<()> {
                     .join("processed")
                     .join("pulses.ssp")
             });
-            let index = match input_path.extension().and_then(|extension| extension.to_str()) {
-                Some("h5") | Some("hdf5") => preprocess_tsrd_hdf5(&input_path, &output_path, chunk_size)?,
+            let index = match input_path
+                .extension()
+                .and_then(|extension| extension.to_str())
+            {
+                Some("h5") | Some("hdf5") => {
+                    preprocess_tsrd_hdf5(&input_path, &output_path, chunk_size)?
+                }
                 _ => preprocess_csv_file(&input_path, &output_path, chunk_size)?,
             };
             let index_path = std::path::Path::new(&config.app.data_dir)
@@ -268,6 +274,11 @@ fn cmd_benchmark(config: &Config, benchmark_type: &str, output_format: &str) -> 
         seed: config.simulator.seed,
         output_dir: output_dir.clone(),
     })?;
+    if std::env::var_os("DATABASE_URL").is_some() {
+        let experiment_id =
+            PostgresExperimentStore::connect_from_environment()?.save_benchmark(&report)?;
+        info!(experiment_id, "Persisted measured benchmark to PostgreSQL");
+    }
     for result in report.results {
         info!(
             scheduler = result.scheduler,

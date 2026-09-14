@@ -1,0 +1,7 @@
+{
+  "format": "smartscan-pulse-v1",
+  "source_path": "data/raw/tsrd_scan_validation/scan/val_scan/config_0.h5",
+  "output_path": "data/processed/tsrd_scan_validation_100k.ssp",
+  "pulse_count": 79340,
+  "record_size_bytes": 40
+}

@@ -14,6 +14,7 @@ pub mod periodic;
 pub mod ppo;
 pub mod scheduler;
 pub mod simulator;
+pub mod storage;
 
 pub use config::Config;
 pub use logging::init_logging;

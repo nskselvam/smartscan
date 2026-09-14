@@ -1,6 +1,6 @@
 use thiserror::Error;
 
-use crate::simulator::RfEnvironment;
+use crate::simulator::{RfEnvironment, StepResult};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct PpoObservation {
@@ -41,6 +41,7 @@ impl PpoObservation {
 #[derive(Debug, Clone, PartialEq)]
 pub struct PpoTransition {
     pub observation: PpoObservation,
+    pub result: StepResult,
     pub reward: f32,
     pub done: bool,
     pub action: usize,
@@ -86,6 +87,18 @@ impl PpoEnvironment {
 
     pub fn num_actions(&self) -> usize {
         self.environment.num_bands
+    }
+
+    pub fn current_time(&self) -> usize {
+        self.environment.current_time
+    }
+
+    pub fn time_horizon(&self) -> usize {
+        self.environment.time_horizon
+    }
+
+    pub fn ground_truth_at(&self, time: usize, band: usize) -> bool {
+        self.environment.ground_truth.is_transmitting(time, band)
     }
 
     pub fn set_predicted_activity(&mut self, predictions: Vec<f32>) -> Result<(), PpoError> {
@@ -162,6 +175,7 @@ impl PpoEnvironment {
 
         Ok(PpoTransition {
             observation: self.observation(),
+            result: result.clone(),
             reward: result.reward,
             done: result.done,
             action,

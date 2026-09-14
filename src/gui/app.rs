@@ -1,7 +1,7 @@
 use eframe::egui::{self, Color32, Pos2, Rect, Stroke, StrokeKind, Vec2};
 
-use crate::scheduler::{RoundRobinScheduler, Scheduler};
-use crate::simulator::{RfEnvironment, Scenario, StepResult};
+use crate::ppo::{PpoAgent, PpoConfig, PpoEnvironment};
+use crate::simulator::{Scenario, StepResult};
 
 const HEATMAP_HEIGHT: f32 = 280.0;
 const MAX_HISTORY_ROWS: usize = 80;
@@ -46,8 +46,8 @@ impl LiveMetrics {
 }
 
 pub struct GuiApp {
-    environment: RfEnvironment,
-    scheduler: RoundRobinScheduler,
+    environment: PpoEnvironment,
+    ppo_agent: PpoAgent,
     auto_run: bool,
     history: Vec<HeatmapRow>,
     metrics: LiveMetrics,
@@ -58,9 +58,23 @@ impl GuiApp {
     pub fn new() -> Self {
         let scenario = Scenario::mixed();
         let num_bands = scenario.num_bands;
+        let environment = PpoEnvironment::new(scenario.into_environment());
+        let ppo_agent = PpoAgent::new(PpoConfig {
+            state_size: environment.observation().to_vector().len(),
+            action_count: num_bands,
+            learning_rate: 0.001,
+            gamma: 0.99,
+            gae_lambda: 0.95,
+            clip_epsilon: 0.2,
+            entropy_coefficient: 0.01,
+            value_loss_coefficient: 0.5,
+            gradient_clip: 1.0,
+            update_epochs: 4,
+            seed: 42,
+        });
         Self {
-            environment: scenario.into_environment(),
-            scheduler: RoundRobinScheduler::new(num_bands),
+            environment,
+            ppo_agent,
             auto_run: false,
             history: Vec::new(),
             metrics: LiveMetrics::default(),
@@ -70,7 +84,6 @@ impl GuiApp {
 
     fn reset(&mut self) {
         self.environment.reset();
-        self.scheduler.reset();
         self.auto_run = false;
         self.history.clear();
         self.metrics = LiveMetrics::default();
@@ -78,17 +91,28 @@ impl GuiApp {
     }
 
     fn step(&mut self) {
-        if self.environment.current_time >= self.environment.time_horizon {
+        if self.environment.current_time() >= self.environment.time_horizon() {
             self.auto_run = false;
             return;
         }
-        let time = self.environment.current_time;
-        let selected_band = self.scheduler.select_band();
-        let truth = (0..self.environment.num_bands)
-            .map(|band| self.environment.ground_truth.is_transmitting(time, band))
+        let time = self.environment.current_time();
+        let action_probabilities = self
+            .ppo_agent
+            .action_probabilities(&self.environment.observation().to_vector());
+        let selected_band = action_probabilities
+            .iter()
+            .enumerate()
+            .max_by(|(_, left), (_, right)| left.total_cmp(right))
+            .map(|(band, _)| band)
+            .expect("PPO has a non-empty action space");
+        let truth = (0..self.environment.num_actions())
+            .map(|band| self.environment.ground_truth_at(time, band))
             .collect();
-        let result = self.environment.step(selected_band);
-        self.scheduler.update(result.reward);
+        let transition = self
+            .environment
+            .step(selected_band)
+            .expect("PPO selected a valid action before episode completion");
+        let result = transition.result;
         self.metrics.record(&result);
         self.history.push(HeatmapRow {
             truth,
@@ -112,10 +136,10 @@ impl GuiApp {
         let rect = response.rect;
         painter.rect_filled(rect, 2.0, Color32::from_rgb(20, 28, 34));
         let rows = self.history.len().max(1);
-        let cell_width = rect.width() / self.environment.num_bands as f32;
+        let cell_width = rect.width() / self.environment.num_actions() as f32;
         let cell_height = rect.height() / rows as f32;
         for (row_index, row) in self.history.iter().enumerate() {
-            for band in 0..self.environment.num_bands {
+            for band in 0..self.environment.num_actions() {
                 let cell = Rect::from_min_size(
                     Pos2::new(
                         rect.left() + band as f32 * cell_width,
@@ -209,9 +233,10 @@ impl eframe::App for GuiApp {
                 ui.separator();
                 ui.label(format!(
                     "Time: {}/{}",
-                    self.environment.current_time, self.environment.time_horizon
+                    self.environment.current_time(),
+                    self.environment.time_horizon()
                 ));
-                ui.label(format!("Scheduler: {}", self.scheduler.name()));
+                ui.label("Scheduler: PPO policy (untrained)");
             });
         });
         egui::SidePanel::right("state")
@@ -236,7 +261,7 @@ impl eframe::App for GuiApp {
                 ui.separator();
                 ui.heading("Model Status");
                 ui.label("DL prediction probabilities: NOT YET MEASURED");
-                ui.label("PPO action probabilities: NOT YET MEASURED");
+                ui.label("PPO action probabilities: live policy output");
                 ui.label("Training progress: NOT YET MEASURED");
             });
         egui::CentralPanel::default().show(context, |ui| {

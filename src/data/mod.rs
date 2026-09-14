@@ -4,9 +4,7 @@ pub mod streaming;
 pub mod windows;
 
 pub use features::{FeatureNormalizer, FeatureVector, NormalizationConfig, NormalizationStats};
-pub use hdf5_loader::{
-    load_tsrd_pulses, preprocess_tsrd_hdf5, TsrdLoadError, TsrdLoadReport,
-};
+pub use hdf5_loader::{load_tsrd_pulses, preprocess_tsrd_hdf5, TsrdLoadError, TsrdLoadReport};
 pub use streaming::{
     inspect_directory, preprocess_csv_file, write_processed_index, CsvPulseReader,
     DatasetInspection, ProcessedFileIndex, PulseRecord, StreamingError,
