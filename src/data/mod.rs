@@ -1,9 +1,13 @@
+pub mod activity;
 pub mod features;
 pub mod hdf5_loader;
 pub mod streaming;
 pub mod windows;
 
-pub use features::{FeatureNormalizer, FeatureVector, NormalizationConfig, NormalizationStats};
+pub use activity::{build_activity_sequences, read_compact_pulses, ActivityDataError};
+pub use features::{
+    FeatureNormalizer, FeatureVector, NormalizationConfig, NormalizationStats, FEATURE_COUNT,
+};
 pub use hdf5_loader::{load_tsrd_pulses, preprocess_tsrd_hdf5, TsrdLoadError, TsrdLoadReport};
 pub use streaming::{
     inspect_directory, preprocess_csv_file, write_processed_index, CsvPulseReader,

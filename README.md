@@ -213,8 +213,17 @@ The project uses:
 - **TSRD**: Turing Synthetic Radar Dataset
   - URL: https://huggingface.co/datasets/alan-turing-institute/turing-synthetic-radar-dataset
   - Challenge: https://github.com/alan-turing-institute/turing-deinterleaving-challenge
+  - Format: HDF5 pulse trains containing ToA, centre frequency, pulse width, AoA, and amplitude
+  - Access: Apache-2.0 dataset with Hugging Face gated-access approval required
+  - Local development splits prepared from distinct scan scenarios:
+    - `data/processed/tsrd_scan_train_100k.ssp`: 100,000 PDWs
+    - `data/processed/tsrd_scan_validation_100k.ssp`: 79,340 PDWs
+    - `data/processed/tsrd_scan_test_100k.ssp`: 100,000 held-out PDWs
+  - The GRU trains on the train scenario and validates on the separate validation scenario. The test scenario remains held out.
 
 - **JC Wise Radar Emitter Database** (2024)
+  - No verified official public download source or license has been identified yet.
+  - It is not included in experiments until a source URL and usage terms are confirmed.
 
 See [docs/DATASETS.md](docs/DATASETS.md) for detailed information.
 

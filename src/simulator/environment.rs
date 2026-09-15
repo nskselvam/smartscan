@@ -262,7 +262,7 @@ mod tests {
         let mut first = RfEnvironment::new(16, 10, receiver.clone(), vec![emitter.clone()], 9);
         let mut second = RfEnvironment::new(16, 10, receiver, vec![emitter], 9);
 
-        assert_eq!(first.ground_truth.data, second.ground_truth.data);
+        assert_eq!(first.ground_truth, second.ground_truth);
         for _ in 0..10 {
             assert_eq!(first.step(8), second.step(8));
         }

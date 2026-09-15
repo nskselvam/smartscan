@@ -48,6 +48,12 @@ impl Scenario {
         self
     }
 
+    pub fn with_time_horizon(mut self, time_horizon: usize) -> Self {
+        assert!(time_horizon > 0, "time_horizon must be positive");
+        self.time_horizon = time_horizon;
+        self
+    }
+
     pub fn fixed_frequency() -> Self {
         Self {
             name: "fixed-frequency".to_string(),
@@ -106,6 +112,14 @@ impl Scenario {
             seed: 42,
         }
     }
+
+    /// Long-duration live display scenario. Ground truth is bit-packed, so the
+    /// 30 × 10,000,000 state matrix remains bounded at roughly 36 MiB.
+    pub fn long_running_mixed() -> Self {
+        Self::mixed()
+            .with_num_bands(30)
+            .with_time_horizon(10_000_000)
+    }
 }
 
 #[cfg(test)]
@@ -137,5 +151,10 @@ mod tests {
     fn scenario_band_count_can_be_configured() {
         let scenario = Scenario::mixed().with_num_bands(30);
         assert_eq!(scenario.num_bands, 30);
+    }
+
+    #[test]
+    fn long_running_scenario_uses_the_requested_horizon() {
+        assert_eq!(Scenario::long_running_mixed().time_horizon, 10_000_000);
     }
 }

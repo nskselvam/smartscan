@@ -1,8 +1,10 @@
 use anyhow::{bail, Result};
 use smartscan::cli::{Args, Command, DataCommand, TrainCommand};
 use smartscan::data::{
-    inspect_directory, preprocess_csv_file, preprocess_tsrd_hdf5, write_processed_index,
+    build_activity_sequences, inspect_directory, preprocess_csv_file, preprocess_tsrd_hdf5,
+    read_compact_pulses, write_processed_index, FeatureNormalizer, NormalizationConfig,
 };
+use smartscan::dl::{train_model, DlTrainingConfig, GruActivityPredictor, GruConfig};
 use smartscan::evaluation::{run_baseline_benchmark, run_episode, BenchmarkConfig, Metrics};
 use smartscan::gui::launch;
 use smartscan::ppo::{PpoAgent, PpoConfig, PpoEnvironment};
@@ -169,20 +171,58 @@ fn cmd_train(config: &Config, subcommand: TrainCommand) -> Result<()> {
             batch_size,
             checkpoint,
         } => {
-            info!("Training DL model");
-            if let Some(e) = epochs {
-                info!("Epochs: {}", e);
+            let train_path = std::path::Path::new(&config.app.data_dir)
+                .join("processed")
+                .join("tsrd_scan_train_100k.ssp");
+            let validation_path = std::path::Path::new(&config.app.data_dir)
+                .join("processed")
+                .join("tsrd_scan_validation_100k.ssp");
+            if !train_path.is_file() || !validation_path.is_file() {
+                bail!("TSRD train/validation compact files are required; run data preprocess for both isolated splits first");
             }
-            if let Some(l) = lr {
-                info!("Learning rate: {}", l);
+            let train_pulses = read_compact_pulses(&train_path, 100_000)?;
+            let validation_pulses = read_compact_pulses(&validation_path, 100_000)?;
+            let normalizer = FeatureNormalizer::fit(&train_pulses, NormalizationConfig::default());
+            let training = build_activity_sequences(&train_pulses, &normalizer, 30, 8, 5_000);
+            let validation =
+                build_activity_sequences(&validation_pulses, &normalizer, 30, 8, 5_000);
+            if training.is_empty() || validation.is_empty() {
+                bail!("TSRD samples did not yield valid 30-band temporal activity sequences");
             }
-            if let Some(b) = batch_size {
-                info!("Batch size: {}", b);
-            }
-            if let Some(c) = checkpoint {
-                info!("Checkpoint: {:?}", c);
-            }
-            warn!("DL training not yet implemented");
+            let checkpoint_path = checkpoint.unwrap_or_else(|| {
+                std::path::Path::new(&config.app.models_dir)
+                    .join("dl")
+                    .join("latest.json")
+            });
+            let mut model = GruActivityPredictor::new(
+                GruConfig::new(10, 16, 1, 30, 8, 0.0),
+                config.simulator.seed,
+            );
+            let report = train_model(
+                &mut model,
+                &training,
+                &validation,
+                &DlTrainingConfig {
+                    epochs: epochs.unwrap_or(config.training.epochs),
+                    batch_size: batch_size.unwrap_or(config.training.batch_size),
+                    learning_rate: lr.unwrap_or(config.training.learning_rate),
+                    learning_rate_decay: 0.5,
+                    early_stopping_patience: 8,
+                    checkpoint_path: checkpoint_path.clone(),
+                },
+            )?;
+            info!(
+                train_sequences = training.len(),
+                validation_sequences = validation.len(),
+                epochs_run = report.epochs_run,
+                best_epoch = report.best_epoch,
+                validation_bce = report.validation_metrics.bce_loss,
+                validation_mae = report.validation_metrics.mae,
+                validation_rmse = report.validation_metrics.rmse,
+                validation_f1 = report.validation_metrics.f1,
+                checkpoint = %checkpoint_path.display(),
+                "Measured DL training and validation result"
+            );
         }
         TrainCommand::Ppo {
             steps,
