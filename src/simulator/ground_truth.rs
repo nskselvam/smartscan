@@ -69,7 +69,7 @@ mod tests {
 
     #[test]
     fn bit_packing_scales_to_long_horizons() {
-        let gt = GroundTruth::new(30, 10_000_000);
-        assert_eq!(gt.bits.len(), 4_687_500);
+        let gt = GroundTruth::new(50, 10_000_000);
+        assert_eq!(gt.bits.len(), 7_812_500);
     }
 }

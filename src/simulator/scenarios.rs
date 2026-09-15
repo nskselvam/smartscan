@@ -54,6 +54,11 @@ impl Scenario {
         self
     }
 
+    pub fn with_receiver(mut self, receiver: Receiver) -> Self {
+        self.receiver = receiver;
+        self
+    }
+
     pub fn fixed_frequency() -> Self {
         Self {
             name: "fixed-frequency".to_string(),

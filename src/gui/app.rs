@@ -5,7 +5,7 @@ use crate::data::{FeatureVector, FEATURE_COUNT};
 use crate::dl::{GruActivityPredictor, GruConfig};
 use crate::periodic::ExplorationReserve;
 use crate::ppo::{PpoAgent, PpoConfig, PpoEnvironment};
-use crate::simulator::{Scenario, StepResult};
+use crate::simulator::{Receiver, Scenario, StepResult};
 
 const MAX_HISTORY_ROWS: usize = 60;
 const MAX_CHART_SAMPLES: usize = 120;
@@ -87,12 +87,24 @@ pub struct GuiApp {
     last_auto_step: Instant,
     metrics: LiveMetrics,
     last_result: Option<StepResult>,
+    presentation_mode: bool,
+    navigation_collapsed: bool,
+    bands_input: String,
+    horizon_input: String,
+    bandwidth_input: String,
+    detection_input: String,
+    false_alarm_input: String,
+    interval_input: String,
+    configuration_message: String,
+    scan_interval: Duration,
+    spectrum_zoom: f32,
 }
 
 impl GuiApp {
     pub fn new() -> Self {
-        let scenario = Scenario::long_running_mixed();
+        let scenario = Scenario::long_running_mixed().with_num_bands(60);
         let num_bands = scenario.num_bands;
+        let time_horizon = scenario.time_horizon;
         let environment = PpoEnvironment::new(scenario.into_environment());
         let ppo_config = PpoConfig {
             state_size: environment.observation().to_vector().len(),
@@ -114,7 +126,7 @@ impl GuiApp {
             }
             _ => PpoAgent::new(ppo_config),
         };
-        let dl_config = GruConfig::new(10, 16, 1, num_bands, 8, 0.0);
+        let dl_config = GruConfig::new(10, 16, 1, 60, 8, 0.0);
         let predictor = GruActivityPredictor::load("models/dl/latest.json")
             .ok()
             .filter(|model| model.config() == &dl_config)
@@ -142,8 +154,19 @@ impl GuiApp {
             last_auto_step: Instant::now(),
             metrics: LiveMetrics::default(),
             last_result: None,
+            presentation_mode: false,
+            navigation_collapsed: false,
+            bands_input: num_bands.to_string(),
+            horizon_input: time_horizon.to_string(),
+            bandwidth_input: "0.10".to_string(),
+            detection_input: "0.95".to_string(),
+            false_alarm_input: "0.01".to_string(),
+            interval_input: "2.0".to_string(),
+            configuration_message: "Ready".to_string(),
+            scan_interval: AUTO_STEP_INTERVAL,
+            spectrum_zoom: 1.0,
         };
-        for _ in 0..30 {
+        for _ in 0..num_bands {
             app.step();
         }
         app
@@ -169,6 +192,75 @@ impl GuiApp {
         self.last_auto_step = Instant::now();
         self.metrics = LiveMetrics::default();
         self.last_result = None;
+        self.configuration_message = "Simulation reset".to_string();
+        self.spectrum_zoom = 1.0;
+    }
+
+    fn apply_configuration(&mut self) {
+        let parsed = (
+            self.bands_input.trim().parse::<usize>(),
+            self.horizon_input.trim().parse::<usize>(),
+            self.bandwidth_input.trim().parse::<f32>(),
+            self.detection_input.trim().parse::<f32>(),
+            self.false_alarm_input.trim().parse::<f32>(),
+            self.interval_input.trim().parse::<f32>(),
+        );
+        let (Ok(bands), Ok(horizon), Ok(bandwidth), Ok(detection), Ok(false_alarm), Ok(interval)) =
+            parsed
+        else {
+            self.configuration_message = "Check the numeric inputs".to_string();
+            return;
+        };
+        if !(1..=256).contains(&bands)
+            || !(1..=10_000_000).contains(&horizon)
+            || !(0.01..=1.0).contains(&bandwidth)
+            || !(0.0..=1.0).contains(&detection)
+            || !(0.0..=1.0).contains(&false_alarm)
+            || !(0.1..=60.0).contains(&interval)
+        {
+            self.configuration_message =
+                "Use bands 1-256, horizon 1-10000000, probabilities 0-1, interval 0.1-60s"
+                    .to_string();
+            return;
+        }
+        let scenario = Scenario::long_running_mixed()
+            .with_num_bands(bands)
+            .with_time_horizon(horizon)
+            .with_receiver(Receiver::new(bandwidth, detection, false_alarm));
+        self.environment = PpoEnvironment::new(scenario.into_environment());
+        self.activity_predictions = vec![0.5; bands];
+        self.action_probabilities = vec![1.0 / bands as f32; bands];
+        self.scans_by_band = vec![0; bands];
+        self.hits_by_band = vec![0; bands];
+        self.last_scan_time_by_band = vec![None; bands];
+        let ppo_config = PpoConfig {
+            state_size: self.environment.observation().to_vector().len(),
+            action_count: bands,
+            learning_rate: 0.001,
+            gamma: 0.99,
+            gae_lambda: 0.95,
+            clip_epsilon: 0.2,
+            entropy_coefficient: 0.01,
+            value_loss_coefficient: 0.5,
+            gradient_clip: 1.0,
+            update_epochs: 4,
+            seed: 42,
+        };
+        self.ppo_agent = PpoAgent::load("models/ppo/latest.json")
+            .ok()
+            .filter(|agent| agent.is_compatible(ppo_config.state_size, bands))
+            .unwrap_or_else(|| PpoAgent::new(ppo_config));
+        let dl_config = GruConfig::new(10, 16, 1, bands, 8, 0.0);
+        self.predictor = GruActivityPredictor::load("models/dl/latest.json")
+            .ok()
+            .filter(|model| model.config() == &dl_config)
+            .unwrap_or_else(|| GruActivityPredictor::new(dl_config, 42));
+        self.scan_interval = Duration::from_secs_f32(interval);
+        self.reset();
+        self.configuration_message = format!("Applied: {bands} bands, {horizon} slots");
+        for _ in 0..bands {
+            self.step();
+        }
     }
 
     fn step(&mut self) {
@@ -285,62 +377,82 @@ impl GuiApp {
         }
     }
 
-    fn draw_heatmap(&self, ui: &mut egui::Ui, height: f32) {
-        let (response, painter) = ui.allocate_painter(
-            Vec2::new(ui.available_width(), height),
+    fn draw_heatmap(&mut self, ui: &mut egui::Ui, height: f32) {
+        let zoom_area = ui.available_rect_before_wrap();
+        let zoom_response = ui.interact(
+            zoom_area,
+            ui.id().with("spectrum-zoom"),
             egui::Sense::hover(),
         );
-        let rect = response.rect;
-        painter.rect_filled(rect, 4.0, Color32::from_rgb(246, 249, 253));
-        let label_width = 46.0;
-        let plot_rect = Rect::from_min_max(
-            Pos2::new(rect.left() + label_width, rect.top()),
-            rect.right_bottom(),
-        );
+        if zoom_response.hovered() {
+            let wheel = ui.input(|input| input.raw_scroll_delta.y);
+            if wheel.abs() > f32::EPSILON {
+                self.spectrum_zoom = (self.spectrum_zoom * (1.0 + wheel * 0.001)).clamp(0.5, 5.0);
+            }
+        }
         let time_columns = self.history.len().max(1);
-        let cell_width = plot_rect.width() / time_columns as f32;
-        let cell_height = plot_rect.height() / self.environment.num_actions() as f32;
-        for band in 0..self.environment.num_actions() {
-            if band % 5 == 0 || band + 1 == self.environment.num_actions() {
-                painter.text(
-                    Pos2::new(
-                        rect.left() + 2.0,
-                        plot_rect.bottom() - (band + 1) as f32 * cell_height,
-                    ),
-                    Align2::LEFT_TOP,
-                    format!("B{band:02}"),
-                    FontId::monospace(10.0),
-                    Color32::from_rgb(72, 85, 104),
+        let band_count = self.environment.num_actions();
+        let cell_width = 18.0_f32 * self.spectrum_zoom;
+        let cell_height = 16.0_f32 * self.spectrum_zoom;
+        let label_width = 46.0_f32;
+        let canvas_width = label_width + time_columns as f32 * cell_width;
+        let canvas_height = band_count as f32 * cell_height;
+
+        egui::ScrollArea::both()
+            .id_salt("frequency-time-scroll")
+            .auto_shrink([false, false])
+            .max_height(height)
+            .show(ui, |ui| {
+                let (response, painter) = ui
+                    .allocate_painter(Vec2::new(canvas_width, canvas_height), egui::Sense::hover());
+                let rect = response.rect;
+                painter.rect_filled(rect, 4.0, Color32::from_rgb(246, 249, 253));
+                let plot_rect = Rect::from_min_max(
+                    Pos2::new(rect.left() + label_width, rect.top()),
+                    rect.right_bottom(),
                 );
-            }
-        }
-        for (time_index, row) in self.history.iter().enumerate() {
-            for band in 0..self.environment.num_actions() {
-                let cell = Rect::from_min_size(
-                    Pos2::new(
-                        plot_rect.left() + time_index as f32 * cell_width,
-                        plot_rect.bottom() - (band + 1) as f32 * cell_height,
-                    ),
-                    Vec2::new(cell_width, cell_height),
-                );
-                let color = if row.observation[band] {
-                    Color32::from_rgb(25, 174, 109)
-                } else if row.truth[band] {
-                    Color32::from_rgb(255, 122, 65)
-                } else {
-                    Color32::from_rgb(222, 231, 241)
-                };
-                painter.rect_filled(cell, 0.0, color);
-                if band == row.selected_band {
-                    painter.rect_stroke(
-                        cell,
-                        0.0,
-                        Stroke::new(1.0_f32, Color32::from_rgb(28, 91, 214)),
-                        StrokeKind::Inside,
-                    );
+                for band in 0..band_count {
+                    if band % 5 == 0 || band + 1 == band_count {
+                        painter.text(
+                            Pos2::new(
+                                rect.left() + 2.0,
+                                plot_rect.bottom() - (band + 1) as f32 * cell_height,
+                            ),
+                            Align2::LEFT_TOP,
+                            format!("B{band:02}"),
+                            FontId::monospace(10.0),
+                            Color32::from_rgb(72, 85, 104),
+                        );
+                    }
                 }
-            }
-        }
+                for (time_index, row) in self.history.iter().enumerate() {
+                    for band in 0..band_count {
+                        let cell = Rect::from_min_size(
+                            Pos2::new(
+                                plot_rect.left() + time_index as f32 * cell_width,
+                                plot_rect.bottom() - (band + 1) as f32 * cell_height,
+                            ),
+                            Vec2::new(cell_width, cell_height),
+                        );
+                        let color = if row.observation.get(band).copied().unwrap_or(false) {
+                            Color32::from_rgb(25, 174, 109)
+                        } else if row.truth.get(band).copied().unwrap_or(false) {
+                            Color32::from_rgb(255, 122, 65)
+                        } else {
+                            Color32::from_rgb(222, 231, 241)
+                        };
+                        painter.rect_filled(cell, 0.0, color);
+                        if band == row.selected_band {
+                            painter.rect_stroke(
+                                cell,
+                                0.0,
+                                Stroke::new(1.0_f32, Color32::from_rgb(28, 91, 214)),
+                                StrokeKind::Inside,
+                            );
+                        }
+                    }
+                }
+            });
         ui.small("Rows: Band 00 to Band 29. Time moves left to right. Orange: signal active. Green: signal found. Blue outline: selected scan.");
     }
 
@@ -661,12 +773,187 @@ impl GuiApp {
             });
     }
 
-    fn draw_overview(&self, ui: &mut egui::Ui) {
+    fn draw_configuration(&mut self, ui: &mut egui::Ui) {
+        ui.heading("Simulation Controls");
+        ui.label("Enter values, then press Apply Configuration.");
+        egui::Grid::new("configuration-grid")
+            .num_columns(2)
+            .striped(true)
+            .show(ui, |ui| {
+                ui.label("Frequency bands");
+                ui.text_edit_singleline(&mut self.bands_input);
+                ui.end_row();
+                ui.label("Time slots");
+                ui.text_edit_singleline(&mut self.horizon_input);
+                ui.end_row();
+                ui.label("Receiver bandwidth");
+                ui.text_edit_singleline(&mut self.bandwidth_input);
+                ui.end_row();
+                ui.label("Detection probability");
+                ui.text_edit_singleline(&mut self.detection_input);
+                ui.end_row();
+                ui.label("False alarm probability");
+                ui.text_edit_singleline(&mut self.false_alarm_input);
+                ui.end_row();
+                ui.label("Seconds per scan");
+                ui.text_edit_singleline(&mut self.interval_input);
+                ui.end_row();
+            });
+        if ui.button("Apply Configuration").clicked() {
+            self.apply_configuration();
+        }
+        ui.label(&self.configuration_message);
+    }
+
+    fn draw_hud(&self, ui: &mut egui::Ui) {
+        let status = if self.auto_run { "RUNNING" } else { "READY" };
+        ui.horizontal(|ui| {
+            ui.heading("SMARTSCAN");
+            ui.small("INTELLIGENCE CORE / SIMULATION WORKSTATION");
+            ui.separator();
+            ui.colored_label(
+                Color32::from_rgb(58, 211, 166),
+                format!("● ONLINE / {status}"),
+            );
+            ui.separator();
+            ui.small(format!(
+                "SIM {} / STEP {}",
+                self.environment.current_time(),
+                self.scan_decisions
+            ));
+            ui.small(format!("BANDS {}", self.environment.num_actions()));
+            ui.small("SEED 42");
+        });
+    }
+
+    fn draw_navigation(&mut self, ui: &mut egui::Ui) {
+        let labels = [
+            (DashboardView::Overview, "⌂  Command Center"),
+            (DashboardView::Spectrum, "◉  Spectrum"),
+            (DashboardView::BandReport, "▣  Band Inspector"),
+            (DashboardView::Activity, "△  Learning & Events"),
+        ];
+        ui.vertical(|ui| {
+            if ui
+                .button(if self.navigation_collapsed {
+                    "»"
+                } else {
+                    "«  Collapse"
+                })
+                .clicked()
+            {
+                self.navigation_collapsed = !self.navigation_collapsed;
+            }
+            ui.separator();
+            for (view, label) in labels {
+                let text = if self.navigation_collapsed {
+                    "●"
+                } else {
+                    label
+                };
+                if ui.selectable_label(self.view == view, text).clicked() {
+                    self.view = view;
+                }
+            }
+            ui.separator();
+            if ui
+                .selectable_label(self.presentation_mode, "◈  Presentation Mode")
+                .clicked()
+            {
+                self.presentation_mode = !self.presentation_mode;
+            }
+            ui.small("F1 Overview  F2 Spectrum  F3 Bands  F4 Activity  P Presentation");
+        });
+    }
+
+    fn draw_ai_insight(&self, ui: &mut egui::Ui) {
+        ui.heading("JARVIS INSIGHT");
+        let selected = self
+            .last_result
+            .as_ref()
+            .map(|result| result.selected_band)
+            .unwrap_or(0);
+        let probability = self
+            .action_probabilities
+            .get(selected)
+            .copied()
+            .unwrap_or(0.0);
+        let forecast = self
+            .activity_predictions
+            .get(selected)
+            .copied()
+            .unwrap_or(0.0);
+        ui.label(format!("Next scan: Band {selected:02}"));
+        ui.label(format!("PPO preference: {:.1}%", probability * 100.0));
+        ui.label(format!("Forecast activity: {:.1}%", forecast * 100.0));
+        ui.separator();
+        ui.strong("Why this band?");
+        if forecast >= 0.5 {
+            ui.label("• Temporal model sees elevated future activity.");
+        } else {
+            ui.label("• PPO is balancing evidence and exploration.");
+        }
+        if self.scans_by_band.get(selected).copied().unwrap_or(0) == 0 {
+            ui.label("• This band has not been checked yet.");
+        } else {
+            ui.label("• Recent scan history is included in the decision.");
+        }
+        ui.label("• The receiver can only inspect a limited window at once.");
+    }
+
+    fn draw_event_stream(&self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            ui.heading("LIVE EVENT STREAM");
+            ui.small("SIMULATION / DL / PPO / RECEIVER / REWARD");
+        });
+        egui::ScrollArea::horizontal().show(ui, |ui| {
+            ui.horizontal(|ui| {
+                for event in self.recent_events.iter().rev().take(8) {
+                    let color = if event.hit {
+                        Color32::from_rgb(25, 174, 109)
+                    } else {
+                        Color32::from_rgb(224, 139, 40)
+                    };
+                    ui.group(|ui| {
+                        ui.small(format!("T+{} / B{:02}", event.time, event.band));
+                        ui.colored_label(
+                            color,
+                            if event.hit {
+                                "SIGNAL FOUND"
+                            } else {
+                                "NO SIGNAL"
+                            },
+                        );
+                        ui.small(format!("Reward {:.2}", event.reward));
+                    });
+                }
+            });
+        });
+    }
+
+    fn draw_presentation(&mut self, ui: &mut egui::Ui) {
+        ui.vertical_centered(|ui| {
+            ui.heading("SMARTSCAN");
+            ui.label("ADAPTIVE FREQUENCY SCANNING / CONTROLLED SIMULATION");
+            ui.add_space(8.0);
+        });
+        self.draw_scoreboard(ui);
+        ui.heading("What is happening?");
+        ui.label("Signals appear over time. The receiver cannot watch every band at once.");
+        ui.label("The temporal model forecasts activity. PPO chooses the next band. The result updates the next decision.");
+        self.draw_heatmap(ui, 390.0);
+        ui.columns(2, |columns| {
+            self.draw_prediction_chart(&mut columns[0]);
+            self.draw_bar_chart(&mut columns[1]);
+        });
+    }
+
+    fn draw_overview(&mut self, ui: &mut egui::Ui) {
         self.draw_decision_strip(ui);
         ui.add_space(6.0);
         self.draw_scoreboard(ui);
         ui.separator();
-        ui.heading("30-Band Spectrum: Recent Activity");
+        ui.heading("60-Band Spectrum: Recent Activity");
         self.draw_heatmap(ui, 250.0);
         ui.columns(2, |columns| {
             self.draw_prediction_chart(&mut columns[0]);
@@ -674,8 +961,20 @@ impl GuiApp {
         });
     }
 
-    fn draw_spectrum(&self, ui: &mut egui::Ui) {
-        ui.heading("30-Band Spectrum Over Time");
+    fn draw_spectrum(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            ui.heading("60-Band Spectrum Over Time");
+            if ui.button("Zoom −").clicked() {
+                self.spectrum_zoom = (self.spectrum_zoom - 0.25).max(0.5);
+            }
+            if ui.button("Reset Zoom").clicked() {
+                self.spectrum_zoom = 1.0;
+            }
+            if ui.button("Zoom +").clicked() {
+                self.spectrum_zoom = (self.spectrum_zoom + 0.25).min(5.0);
+            }
+            ui.label(format!("{:.0}%", self.spectrum_zoom * 100.0));
+        });
         self.draw_heatmap(ui, 520.0);
         ui.columns(2, |columns| {
             self.draw_prediction_chart(&mut columns[0]);
@@ -722,91 +1021,107 @@ impl eframe::App for GuiApp {
         if context.style().visuals.dark_mode {
             context.set_visuals(egui::Visuals::light());
         }
-        if self.auto_run && self.last_auto_step.elapsed() >= AUTO_STEP_INTERVAL {
+        context.input(|input| {
+            if input.key_pressed(egui::Key::Space) {
+                self.auto_run = !self.auto_run;
+            }
+            if input.key_pressed(egui::Key::S) {
+                self.step();
+            }
+            if input.key_pressed(egui::Key::R) {
+                self.reset();
+            }
+            if input.key_pressed(egui::Key::P) {
+                self.presentation_mode = !self.presentation_mode;
+            }
+            if input.key_pressed(egui::Key::Num1) {
+                self.view = DashboardView::Overview;
+            }
+            if input.key_pressed(egui::Key::Num2) {
+                self.view = DashboardView::Spectrum;
+            }
+            if input.key_pressed(egui::Key::Num3) {
+                self.view = DashboardView::BandReport;
+            }
+            if input.key_pressed(egui::Key::Num4) {
+                self.view = DashboardView::Activity;
+            }
+        });
+        if self.auto_run && self.last_auto_step.elapsed() >= self.scan_interval {
             self.step();
             self.last_auto_step = Instant::now();
         }
         context.request_repaint_after(Duration::from_millis(100));
-        egui::TopBottomPanel::top("controls").show(context, |ui| {
+        egui::TopBottomPanel::top("jarvis-hud").show(context, |ui| self.draw_hud(ui));
+        egui::TopBottomPanel::top("operator-controls").show(context, |ui| {
             ui.horizontal(|ui| {
-                ui.heading("SMARTSCAN");
-                ui.separator();
-                if ui
-                    .selectable_label(self.view == DashboardView::Overview, "Overview")
-                    .clicked()
-                {
-                    self.view = DashboardView::Overview;
-                }
-                if ui
-                    .selectable_label(self.view == DashboardView::Spectrum, "Spectrum")
-                    .clicked()
-                {
-                    self.view = DashboardView::Spectrum;
-                }
-                if ui
-                    .selectable_label(self.view == DashboardView::BandReport, "Band Report")
-                    .clicked()
-                {
-                    self.view = DashboardView::BandReport;
-                }
-                if ui
-                    .selectable_label(self.view == DashboardView::Activity, "Activity")
-                    .clicked()
-                {
-                    self.view = DashboardView::Activity;
-                }
+                ui.strong("OPERATOR CONTROLS");
                 ui.separator();
                 if ui
                     .button(if self.auto_run { "Pause" } else { "Run" })
                     .clicked()
                 {
                     self.auto_run = !self.auto_run;
+                    self.last_auto_step = Instant::now();
                 }
                 if ui.button("Step").clicked() {
                     self.step();
+                    self.last_auto_step = Instant::now();
                 }
                 if ui.button("Reset").clicked() {
                     self.reset();
                 }
                 ui.separator();
+                ui.label(if self.auto_run {
+                    "● LIVE"
+                } else {
+                    "○ PAUSED"
+                });
                 ui.label(format!(
-                    "Time: {}/{}",
-                    self.environment.current_time(),
-                    self.environment.time_horizon()
+                    "Next update: {:.1}s",
+                    self.scan_interval.as_secs_f32()
                 ));
-                ui.label("Adaptive scheduler: temporal forecast + PPO policy");
+                ui.separator();
+                ui.small("Space Run/Pause  •  S Step  •  R Reset  •  P Presentation");
             });
         });
-        egui::SidePanel::right("state")
-            .min_width(290.0)
-            .show(context, |ui| {
-                ui.heading("Live Receiver");
-                if let Some(result) = &self.last_result {
-                    ui.label(format!("Listening on band {}", result.selected_band));
-                    ui.label(format!("Latest reward: {:.3}", result.reward));
-                    ui.label(if result.info.true_positives > 0 {
-                        "Detection: HIT"
-                    } else {
-                        "Detection: MISS"
-                    });
-                    ui.label(format!("Signals active now: {}", result.info.active_bands));
+        if !self.presentation_mode {
+            egui::SidePanel::left("navigation")
+                .resizable(false)
+                .default_width(if self.navigation_collapsed {
+                    48.0
                 } else {
-                    ui.label("No scan executed");
+                    180.0
+                })
+                .show(context, |ui| self.draw_navigation(ui));
+            egui::SidePanel::right("intelligence")
+                .resizable(true)
+                .min_width(280.0)
+                .show(context, |ui| {
+                    ui.heading("AI INTELLIGENCE");
+                    self.draw_ai_insight(ui);
+                    ui.separator();
+                    ui.heading("RECEIVER TELEMETRY");
+                    self.draw_metrics(ui);
+                    ui.separator();
+                    self.draw_configuration(ui);
+                });
+        }
+        egui::TopBottomPanel::bottom("events")
+            .resizable(true)
+            .default_height(110.0)
+            .show(context, |ui| self.draw_event_stream(ui));
+        egui::CentralPanel::default().show(context, |ui| {
+            if self.presentation_mode {
+                self.draw_presentation(ui);
+            } else {
+                match self.view {
+                    DashboardView::Overview => self.draw_overview(ui),
+                    DashboardView::Spectrum => self.draw_spectrum(ui),
+                    DashboardView::BandReport => self.draw_band_reports(ui),
+                    DashboardView::Activity => self.draw_activity(ui),
                 }
-                ui.separator();
-                ui.heading("Performance So Far");
-                self.draw_metrics(ui);
-                ui.separator();
-                ui.heading("System Ready");
-                ui.label("Activity forecast updated before every scan");
-                ui.label("PPO chooses the next scan band");
-                ui.label("Live results update after each receiver scan");
-            });
-        egui::CentralPanel::default().show(context, |ui| match self.view {
-            DashboardView::Overview => self.draw_overview(ui),
-            DashboardView::Spectrum => self.draw_spectrum(ui),
-            DashboardView::BandReport => self.draw_band_reports(ui),
-            DashboardView::Activity => self.draw_activity(ui),
+            }
         });
     }
 }
@@ -829,7 +1144,7 @@ mod tests {
     #[test]
     fn initial_sweep_checks_each_receiver_band_once() {
         let app = GuiApp::new();
-        assert_eq!(app.scans_by_band.len(), 30);
+        assert_eq!(app.scans_by_band.len(), 60);
         assert!(app.scans_by_band.iter().all(|scans| *scans == 1));
     }
 }

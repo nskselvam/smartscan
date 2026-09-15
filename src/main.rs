@@ -183,11 +183,11 @@ fn cmd_train(config: &Config, subcommand: TrainCommand) -> Result<()> {
             let train_pulses = read_compact_pulses(&train_path, 100_000)?;
             let validation_pulses = read_compact_pulses(&validation_path, 100_000)?;
             let normalizer = FeatureNormalizer::fit(&train_pulses, NormalizationConfig::default());
-            let training = build_activity_sequences(&train_pulses, &normalizer, 30, 8, 5_000);
+            let training = build_activity_sequences(&train_pulses, &normalizer, 60, 8, 5_000);
             let validation =
-                build_activity_sequences(&validation_pulses, &normalizer, 30, 8, 5_000);
+                build_activity_sequences(&validation_pulses, &normalizer, 60, 8, 5_000);
             if training.is_empty() || validation.is_empty() {
-                bail!("TSRD samples did not yield valid 30-band temporal activity sequences");
+                bail!("TSRD samples did not yield valid 60-band temporal activity sequences");
             }
             let checkpoint_path = checkpoint.unwrap_or_else(|| {
                 std::path::Path::new(&config.app.models_dir)
@@ -195,7 +195,7 @@ fn cmd_train(config: &Config, subcommand: TrainCommand) -> Result<()> {
                     .join("latest.json")
             });
             let mut model = GruActivityPredictor::new(
-                GruConfig::new(10, 16, 1, 30, 8, 0.0),
+                GruConfig::new(10, 16, 1, 60, 8, 0.0),
                 config.simulator.seed,
             );
             let report = train_model(
@@ -232,7 +232,7 @@ fn cmd_train(config: &Config, subcommand: TrainCommand) -> Result<()> {
             if steps == 0 {
                 bail!("PPO training steps must be positive");
             }
-            let scenario = Scenario::mixed().with_num_bands(30);
+            let scenario = Scenario::mixed().with_num_bands(60);
             let action_count = scenario.num_bands;
             let mut environment = PpoEnvironment::new(scenario.into_environment());
             let state_size = environment.observation().to_vector().len();
